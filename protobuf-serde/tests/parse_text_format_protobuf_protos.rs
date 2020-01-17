@@ -2,10 +2,10 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
-use protobuf_compiler::parser;
+use protobuf_serde::text_format::parser;
 
 #[test]
-fn test() {
+fn test_text_format_protobuf_protos() {
     let path = &Path::new("../proto");
     parse_recursively(path);
 }

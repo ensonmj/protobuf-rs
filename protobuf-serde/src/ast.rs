@@ -1,6 +1,5 @@
-//! This crate can be seen as a rust transcription of the
+//! This file can be seen as a rust transcription of the
 //! [descriptor.proto](https://github.com/google/protobuf/blob/master/src/google/protobuf/descriptor.proto) file
-use crate::float;
 
 #[derive(Debug, Default, Clone)]
 pub struct FileDescriptor {
@@ -242,18 +241,4 @@ pub enum ProtobufConstant {
     Ident(String),
     String(String),
     BracedExpr(String),
-}
-
-impl ProtobufConstant {
-    pub fn format(&self) -> String {
-        match *self {
-            ProtobufConstant::U64(u) => u.to_string(),
-            ProtobufConstant::I64(i) => i.to_string(),
-            ProtobufConstant::F64(f) => float::format_protobuf_float(f),
-            ProtobufConstant::Bool(b) => b.to_string(),
-            ProtobufConstant::Ident(ref i) => i.clone(),
-            ProtobufConstant::String(ref s) => s.clone(),
-            ProtobufConstant::BracedExpr(ref s) => s.clone(),
-        }
-    }
 }

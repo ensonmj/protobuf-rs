@@ -1,5 +1,5 @@
 [package]
-name = "protobuf-compiler"
+name = "protobuf-serde"
 version = "0.1.0"
 authors = ["ensonmj <ensonmj@gmail.com>"]
 edition = "2018"

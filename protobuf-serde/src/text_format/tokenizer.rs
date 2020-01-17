@@ -1,12 +1,12 @@
 use std::f64;
 
-use crate::float::PROTOBUF_INF;
-use crate::float::PROTOBUF_NAN;
-use crate::lexer::Lexer;
-use crate::lexer::LexerError;
-use crate::loc::Loc;
-use crate::token::Token;
-use crate::token::TokenWithLocation;
+use super::float::PROTOBUF_INF;
+use super::float::PROTOBUF_NAN;
+use super::lexer::Lexer;
+use super::lexer::LexerError;
+use super::loc::Loc;
+use super::token::Token;
+use super::token::TokenWithLocation;
 
 #[derive(Debug)]
 pub enum TokenizerError {

@@ -1,4 +1,4 @@
-use crate::loc::Loc;
+use super::loc::Loc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Token {

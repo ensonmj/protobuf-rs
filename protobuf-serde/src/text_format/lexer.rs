@@ -1,7 +1,7 @@
 use std::num::ParseIntError;
 
-use crate::float::{self, ProtobufFloatParseError};
-use crate::loc::{Loc, FIRST_COL};
+use super::float::{self, ProtobufFloatParseError};
+use super::loc::{Loc, FIRST_COL};
 
 #[derive(Debug)]
 pub enum LexerError {

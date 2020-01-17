@@ -18,6 +18,7 @@ pub fn format_protobuf_float(f: f64) -> String {
         format!("{:?}", f)
     }
 }
+
 #[derive(Debug)]
 pub enum ProtobufFloatParseError {
     EmptyString,

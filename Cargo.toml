@@ -1,4 +1,4 @@
 [workspace]
 members = [
-    "protobuf-compiler",
+    "protobuf-serde",
 ]

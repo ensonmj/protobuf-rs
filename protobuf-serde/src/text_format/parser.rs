@@ -1,7 +1,7 @@
+use super::token::Token;
+use super::tokenizer::Tokenizer;
+use super::tokenizer::TokenizerError;
 use crate::ast::*;
-use crate::token::Token;
-use crate::tokenizer::Tokenizer;
-use crate::tokenizer::TokenizerError;
 
 /// Basic information about parsing error.
 #[derive(Debug)]
