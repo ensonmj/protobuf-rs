@@ -1,7 +1,10 @@
 use std::f64;
+use std::num::ParseFloatError;
 
-pub const PROTOBUF_NAN: &str = "nan";
-pub const PROTOBUF_INF: &str = "inf";
+pub const PROTOBUF_NAN: &str = "nan"; // "NaN" in rust
+pub const PROTOBUF_INF: &str = "inf"; // "inf" in rust
+pub const JSON_NAN: &str = "NaN";
+pub const JSON_INF: &str = "Infinity";
 
 /// Format float as in protobuf `.proto` files
 pub fn format_protobuf_float(f: f64) -> String {
@@ -19,19 +22,8 @@ pub fn format_protobuf_float(f: f64) -> String {
     }
 }
 
-#[derive(Debug)]
-pub enum ProtobufFloatParseError {
-    EmptyString,
-    CannotParseFloat,
-}
-
-pub type ProtobufFloatParseResult<T> = Result<T, ProtobufFloatParseError>;
-
 /// Parse float from `.proto` format
-pub fn parse_protobuf_float(s: &str) -> ProtobufFloatParseResult<f64> {
-    if s.is_empty() {
-        return Err(ProtobufFloatParseError::EmptyString);
-    }
+pub fn parse_protobuf_float(s: &str) -> Result<f64, ParseFloatError> {
     if s == PROTOBUF_NAN {
         return Ok(f64::NAN);
     }
@@ -41,8 +33,5 @@ pub fn parse_protobuf_float(s: &str) -> ProtobufFloatParseResult<f64> {
     if s == format!("-{}", PROTOBUF_INF) {
         return Ok(f64::NEG_INFINITY);
     }
-    match s.parse() {
-        Ok(f) => Ok(f),
-        Err(_) => Err(ProtobufFloatParseError::CannotParseFloat),
-    }
+    s.parse()
 }

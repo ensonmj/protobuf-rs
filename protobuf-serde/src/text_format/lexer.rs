@@ -1,7 +1,8 @@
+use std::num::ParseFloatError;
 use std::num::ParseIntError;
 
-use super::float::{self, ProtobufFloatParseError};
 use super::loc::{Loc, FIRST_COL};
+use crate::float;
 
 #[derive(Debug)]
 pub enum LexerError {
@@ -21,8 +22,8 @@ impl From<ParseIntError> for LexerError {
     }
 }
 
-impl From<ProtobufFloatParseError> for LexerError {
-    fn from(_: ProtobufFloatParseError) -> Self {
+impl From<ParseFloatError> for LexerError {
+    fn from(_: ParseFloatError) -> Self {
         LexerError::ParseFloatError
     }
 }
@@ -42,6 +43,34 @@ impl<'a> Lexer<'a> {
             input,
             pos: 0,
             loc: Loc::start(),
+        }
+    }
+
+    // Identifiers
+    // ident = letter { letter | decimalDigit | "_" }
+    // messageName = ident
+    // enumName = ident
+    // fieldName = ident
+    // oneofName = ident
+    // mapName = ident
+    // serviceName = ident
+    // rpcName = ident
+    // streamName = ident
+    // messageType = [ "." ] { ident "." } messageName
+    // enumType = [ "." ] { ident "." } enumName
+    // groupName = capitalLetter { letter | decimalDigit | "_" } (proto2 only)
+
+    // ident = letter { letter | decimalDigit | "_" }
+    pub fn next_ident_opt(&mut self) -> LexerResult<Option<String>> {
+        if let Some(c) = self.next_letter_opt() {
+            let mut ident = String::new();
+            ident.push(c);
+            while let Some(c) = self.next_char_if(|c| c.is_ascii_alphanumeric() || c == '_') {
+                ident.push(c);
+            }
+            Ok(Some(ident))
+        } else {
+            Ok(None)
         }
     }
 
@@ -83,80 +112,6 @@ impl<'a> Lexer<'a> {
         };
         *self = clone;
         Ok(r)
-    }
-
-    // Identifiers
-    // ident = letter { letter | decimalDigit | "_" }
-    // messageName = ident
-    // enumName = ident
-    // fieldName = ident
-    // oneofName = ident
-    // mapName = ident
-    // serviceName = ident
-    // rpcName = ident
-    // streamName = ident
-    // messageType = [ "." ] { ident "." } messageName
-    // enumType = [ "." ] { ident "." } enumName
-    // groupName = capitalLetter { letter | decimalDigit | "_" } (proto2 only)
-
-    // ident = letter { letter | decimalDigit | "_" }
-    pub fn next_ident_opt(&mut self) -> LexerResult<Option<String>> {
-        if let Some(c) = self.next_letter_opt() {
-            let mut ident = String::new();
-            ident.push(c);
-            while let Some(c) = self.next_char_if(|c| c.is_ascii_alphanumeric() || c == '_') {
-                ident.push(c);
-            }
-            Ok(Some(ident))
-        } else {
-            Ok(None)
-        }
-    }
-
-    // Integer literals
-    // intLit = decimalLit | octalLit | hexLit
-    // decimalLit = ( "1" … "9" ) { decimalDigit }
-    // octalLit = "0" { octalDigit }
-    // hexLit = "0" ( "x" | "X" ) hexDigit { hexDigit }
-
-    // intLit = decimalLit | octalLit | hexLit1
-    pub fn next_int_lit_opt(&mut self) -> LexerResult<Option<u64>> {
-        if let Some(i) = self.next_hex_lit_opt()? {
-            return Ok(Some(i));
-        }
-        if let Some(i) = self.next_decimal_octal_lit_opt()? {
-            return Ok(Some(i));
-        }
-        Ok(None)
-    }
-
-    // decimalLit = ( "1" … "9" ) { decimalDigit }
-    // octalLit = "0" { octalDigit }
-    fn next_decimal_octal_lit_opt(&mut self) -> LexerResult<Option<u64>> {
-        // do not advance on number parse error
-        let mut clone = self.clone();
-        let start = clone.pos;
-
-        Ok(if clone.next_char_if(|c| c.is_ascii_digit()) != None {
-            clone.take_while(|c| c.is_ascii_digit());
-            let value = clone.input[start..clone.pos].parse()?;
-            *self = clone;
-            Some(value)
-        } else {
-            None
-        })
-    }
-
-    // hexLit = "0" ( "x" | "X" ) hexDigit { hexDigit }
-    fn next_hex_lit_opt(&mut self) -> LexerResult<Option<u64>> {
-        Ok(
-            if self.skip_if_lookahead_is_str("0x") || self.skip_if_lookahead_is_str("0X") {
-                let s = self.take_while(|c| c.is_ascii_hexdigit());
-                Some(u64::from_str_radix(s, 16)? as u64)
-            } else {
-                None
-            },
-        )
     }
 
     // Floating-point literals
@@ -207,6 +162,52 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    // Integer literals
+    // intLit = decimalLit | octalLit | hexLit
+    // decimalLit = ( "1" … "9" ) { decimalDigit }
+    // octalLit = "0" { octalDigit }
+    // hexLit = "0" ( "x" | "X" ) hexDigit { hexDigit }
+
+    // intLit = decimalLit | octalLit | hexLit
+    pub fn next_int_lit_opt(&mut self) -> LexerResult<Option<u64>> {
+        if let Some(i) = self.next_hex_lit_opt()? {
+            return Ok(Some(i));
+        }
+        if let Some(i) = self.next_decimal_octal_lit_opt()? {
+            return Ok(Some(i));
+        }
+        Ok(None)
+    }
+
+    // decimalLit = ( "1" … "9" ) { decimalDigit }
+    // octalLit = "0" { octalDigit }
+    fn next_decimal_octal_lit_opt(&mut self) -> LexerResult<Option<u64>> {
+        // do not advance on number parse error
+        let mut clone = self.clone();
+        let start = clone.pos;
+
+        Ok(if clone.next_char_if(|c| c.is_ascii_digit()) != None {
+            clone.take_while(|c| c.is_ascii_digit());
+            let value = clone.input[start..clone.pos].parse()?;
+            *self = clone;
+            Some(value)
+        } else {
+            None
+        })
+    }
+
+    // hexLit = "0" ( "x" | "X" ) hexDigit { hexDigit }
+    fn next_hex_lit_opt(&mut self) -> LexerResult<Option<u64>> {
+        Ok(
+            if self.skip_if_lookahead_is_str("0x") || self.skip_if_lookahead_is_str("0X") {
+                let s = self.take_while(|c| c.is_ascii_hexdigit());
+                Some(u64::from_str_radix(s, 16)? as u64)
+            } else {
+                None
+            },
+        )
+    }
+
     // String literals
     // strLit = ( "'" { charValue } "'" ) |  ( '"' { charValue } '"' )
     // charValue = hexEscape | octEscape | charEscape | /[^\0\n\\]/
@@ -242,7 +243,7 @@ impl<'a> Lexer<'a> {
     // octEscape = '\' octalDigit octalDigit octalDigit
     // charEscape = '\' ( "a" | "b" | "f" | "n" | "r" | "t" | "v" | '\' | "'" | '"' )
     // quote = "'" | '"'
-    pub fn next_char_value(&mut self) -> LexerResult<char> {
+    fn next_char_value(&mut self) -> LexerResult<char> {
         match self.next_char()? {
             '\\' => {
                 match self.next_char()? {
