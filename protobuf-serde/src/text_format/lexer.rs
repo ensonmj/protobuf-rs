@@ -155,7 +155,7 @@ impl<'a> Lexer<'a> {
     fn next_exponent_opt(&mut self) -> LexerResult<Option<()>> {
         if self.next_char_if_in("eE") != None {
             self.next_char_if_in("+-");
-            self.next_decimal_digit()?;
+            self.next_decimal_digits()?;
             Ok(Some(()))
         } else {
             Ok(None)

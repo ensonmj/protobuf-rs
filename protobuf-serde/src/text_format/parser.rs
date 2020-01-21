@@ -1089,7 +1089,7 @@ mod test {
             message Outer {
                 option (my_option).a = true;
                 message Inner {   // Level 2
-                    required int64 ival = 1;
+                    required int64 ival = 1 [default = -8e-28];
                 }
                 map<int32, string> my_map = 2;
                 extensions 20 to 30;
@@ -1104,6 +1104,11 @@ mod test {
         assert_eq!(res.messages[0].fields[0].name, "ival");
         assert_eq!(res.messages[0].fields[0].number, 1);
         assert_eq!(res.messages[0].fields[0].typ, FieldType::Int64);
+        assert_eq!(res.messages[0].fields[0].options[0].name, "default");
+        assert_eq!(
+            res.messages[0].fields[0].options[0].value,
+            ProtobufConstant::F64(-8e-28)
+        );
         assert_eq!(res.fields[0].name, "my_map");
         assert_eq!(res.fields[0].number, 2);
         assert_eq!(
