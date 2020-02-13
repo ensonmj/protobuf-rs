@@ -168,10 +168,15 @@ pub struct FieldNumberRange {
 pub struct Enumeration {
     /// enum name
     pub name: String,
-    /// enum values
-    pub values: Vec<EnumValue>,
     /// enum options
     pub options: Vec<ProtobufOption>,
+    /// Message reserved numbers
+    /// TODO: use RangeInclusive once stable
+    pub reserved_nums: Vec<FieldNumberRange>,
+    /// Message reserved names
+    pub reserved_names: Vec<String>,
+    /// enum values
+    pub values: Vec<EnumValue>,
 }
 
 /// A protobuf enumeration field
@@ -205,8 +210,8 @@ pub struct Extend {
 pub struct Service {
     /// Service name
     pub name: String,
-    pub methods: Vec<Method>,
     pub options: Vec<ProtobufOption>,
+    pub methods: Vec<Method>,
 }
 
 /// Service method
@@ -229,15 +234,14 @@ pub struct Method {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProtobufOption {
     pub name: String,
-    pub value: ProtobufConstant,
+    pub value: UninterpretedOptionValue,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ProtobufConstant {
+pub enum UninterpretedOptionValue {
     U64(u64),
     I64(i64),
     F64(f64), // TODO: eq
-    Bool(bool),
     Ident(String),
     String(String),
     BracedExpr(String),

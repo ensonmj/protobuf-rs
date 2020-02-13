@@ -6,7 +6,7 @@ use protobuf_serde::text_format::parser;
 
 #[test]
 fn test_text_format_protobuf_protos() {
-    let path = &Path::new("../proto");
+    let path = &Path::new("../google-protobuf");
     parse_recursively(path);
 }
 

@@ -1,12 +1,12 @@
 use std::f64;
 
-use super::float::PROTOBUF_INF;
-use super::float::PROTOBUF_NAN;
 use super::lexer::Lexer;
 use super::lexer::LexerError;
 use super::loc::Loc;
 use super::token::Token;
 use super::token::TokenWithLocation;
+use crate::float::PROTOBUF_INF;
+use crate::float::PROTOBUF_NAN;
 
 #[derive(Debug)]
 pub enum TokenizerError {
@@ -23,13 +23,13 @@ pub enum TokenizerError {
     ExpectAnyChar(Vec<char>),
 }
 
-pub type TokenizerResult<R> = Result<R, TokenizerError>;
-
 impl From<LexerError> for TokenizerError {
     fn from(e: LexerError) -> Self {
         TokenizerError::LexerError(e)
     }
 }
+
+pub type TokenizerResult<R> = Result<R, TokenizerError>;
 
 #[derive(Clone)]
 pub struct Tokenizer<'a> {
@@ -165,11 +165,19 @@ impl<'a> Tokenizer<'a> {
         })
     }
 
+    // Allow C++ like concatenation of adjacent string tokens.
     pub fn next_str_lit(&mut self) -> TokenizerResult<String> {
-        self.next_token_expect_map(|token| match token {
-            Token::StrLit(s) => Ok(s.clone()),
-            _ => Err(TokenizerError::ExpectStrLit),
-        })
+        let mut full_str = String::new();
+        match self.lookahead()? {
+            Some(Token::StrLit(s)) => full_str.push_str(s),
+            _ => return Err(TokenizerError::ExpectStrLit),
+        }
+        self.next_token = None;
+        while let Some(Token::StrLit(s)) = self.lookahead()? {
+            full_str.push_str(s);
+            self.next_token = None;
+        }
+        Ok(full_str)
     }
 
     pub fn next_token_if_map<P>(&mut self, p: P) -> TokenizerResult<bool>
@@ -191,7 +199,10 @@ impl<'a> Tokenizer<'a> {
         E: From<TokenizerError>,
     {
         let r = match self.lookahead()? {
-            Some(token) => p(token)?,
+            Some(token) => p(token).map_err(|e| {
+                println!("Unexpected Token Loc: {}", self.last_token_loc.unwrap());
+                e
+            })?,
             None => return Err(TokenizerError::UnexpectedEof.into()),
         };
         self.next_token = None;

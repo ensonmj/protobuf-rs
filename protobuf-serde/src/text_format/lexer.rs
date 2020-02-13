@@ -6,14 +6,14 @@ use crate::float;
 
 #[derive(Debug)]
 pub enum LexerError {
-    IncorrectInput, // TODO: something better than this
-    UnexpectedEof,
+    IncorrectInput(Loc), // TODO: something better than this
+    UnexpectedEof(Loc),
     ParseIntError,
     ParseFloatError,
-    ExpectChar(char),
-    ExpectHexDigit,
-    ExpectOctDigit,
-    ExpectDecDigit,
+    ExpectChar(Loc, char),
+    ExpectHexDigit(Loc),
+    ExpectOctDigit(Loc),
+    ExpectDecDigit(Loc),
 }
 
 impl From<ParseIntError> for LexerError {
@@ -37,6 +37,32 @@ pub struct Lexer<'a> {
     pub loc: Loc,
 }
 
+// google protobuf parser **protoc** mismatch language specification
+// https://github.com/protocolbuffers/protobuf/issues/4554
+// https://github.com/protocolbuffers/protobuf/issues/5075
+//
+// CHARACTER_CLASS(Whitespace, c == ' ' || c == '\n' || c == '\t' ||
+//                             c == '\r' || c == '\v' || c == '\f');
+// CHARACTER_CLASS(WhitespaceNoNewline, c == ' ' || c == '\t' ||
+//                                      c == '\r' || c == '\v' || c == '\f');
+// CHARACTER_CLASS(Unprintable, c < ' ' && c > '\0');
+// CHARACTER_CLASS(Digit, '0' <= c && c <= '9');
+// CHARACTER_CLASS(OctalDigit, '0' <= c && c <= '7');
+// CHARACTER_CLASS(HexDigit, ('0' <= c && c <= '9') ||
+//                           ('a' <= c && c <= 'f') ||
+//                           ('A' <= c && c <= 'F'));
+// CHARACTER_CLASS(Letter, ('a' <= c && c <= 'z') ||
+//                         ('A' <= c && c <= 'Z') ||
+//                         (c == '_'));
+// CHARACTER_CLASS(Alphanumeric, ('a' <= c && c <= 'z') ||
+//                               ('A' <= c && c <= 'Z') ||
+//                               ('0' <= c && c <= '9') ||
+//                               (c == '_'));
+// CHARACTER_CLASS(Escape, c == 'a' || c == 'b' || c == 'f' || c == 'n' ||
+//                         c == 'r' || c == 't' || c == 'v' || c == '\\' ||
+//                         c == '?' || c == '\'' || c == '\"');
+//
+// we use protoc as standard for compatibility
 impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Lexer<'a> {
         Lexer {
@@ -62,56 +88,29 @@ impl<'a> Lexer<'a> {
 
     // ident = letter { letter | decimalDigit | "_" }
     pub fn next_ident_opt(&mut self) -> LexerResult<Option<String>> {
-        if let Some(c) = self.next_letter_opt() {
+        fn is_letter(c: char) -> bool {
+            // CHARACTER_CLASS(Letter, ('a' <= c && c <= 'z') ||
+            //                         ('A' <= c && c <= 'Z') ||
+            //                         (c == '_'));
+            c.is_alphabetic() || c == '_'
+        }
+        fn is_alphanumeric(c: char) -> bool {
+            // CHARACTER_CLASS(Alphanumeric, ('a' <= c && c <= 'z') ||
+            //                               ('A' <= c && c <= 'Z') ||
+            //                               ('0' <= c && c <= '9') ||
+            //                               (c == '_'));
+            c.is_ascii_alphanumeric() || c == '_'
+        }
+        if let Some(c) = self.next_char_if(is_letter) {
             let mut ident = String::new();
             ident.push(c);
-            while let Some(c) = self.next_char_if(|c| c.is_ascii_alphanumeric() || c == '_') {
+            while let Some(c) = self.next_char_if(is_alphanumeric) {
                 ident.push(c);
             }
             Ok(Some(ident))
         } else {
             Ok(None)
         }
-    }
-
-    // Letters and digits
-    // letter = "A" … "Z" | "a" … "z"
-    // capitalLetter =  "A" … "Z" (proto2 only)
-    // decimalDigit = "0" … "9"
-    // octalDigit   = "0" … "7"
-    // hexDigit     = "0" … "9" | "A" … "F" | "a" … "f"
-
-    // letter = "A" … "Z" | "a" … "z"
-    fn next_letter_opt(&mut self) -> Option<char> {
-        fn is_letter(c: char) -> bool {
-            c.is_alphabetic() || c == '_'
-        }
-        self.next_char_if(is_letter)
-    }
-
-    // decimalDigit = "0" … "9"
-    fn next_decimal_digit(&mut self) -> LexerResult<u32> {
-        self.next_char_expect(|c| c >= '0' && c <= '9', LexerError::ExpectDecDigit)
-            .map(|c| c as u32 - '0' as u32)
-    }
-
-    // octalDigit = "0" … "7"
-    fn next_octal_digit(&mut self) -> LexerResult<u32> {
-        self.next_char_expect(|c| c >= '0' && c <= '7', LexerError::ExpectOctDigit)
-            .map(|c| c as u32 - '0' as u32)
-    }
-
-    // hexDigit = "0" … "9" | "A" … "F" | "a" … "f"
-    fn next_hex_digit(&mut self) -> LexerResult<u32> {
-        let mut clone = self.clone();
-        let r = match clone.next_char()? {
-            c if c >= '0' && c <= '9' => c as u32 - b'0' as u32,
-            c if c >= 'A' && c <= 'Z' => c as u32 - b'A' as u32 + 10,
-            c if c >= 'a' && c <= 'z' => c as u32 - b'a' as u32 + 10,
-            _ => return Err(LexerError::ExpectHexDigit),
-        };
-        *self = clone;
-        Ok(r)
     }
 
     // Floating-point literals
@@ -149,6 +148,15 @@ impl<'a> Lexer<'a> {
         self.next_decimal_digit()?;
         self.take_while(|c| c >= '0' && c <= '9');
         Ok(())
+    }
+
+    // decimalDigit = "0" … "9"
+    fn next_decimal_digit(&mut self) -> LexerResult<u32> {
+        self.next_char_expect(
+            |c| c >= '0' && c <= '9',
+            LexerError::ExpectDecDigit(self.loc),
+        )
+        .map(|c| c as u32 - '0' as u32)
     }
 
     // exponent = ( "e" | "E" ) [ "+" | "-" ] decimals
@@ -278,13 +286,36 @@ impl<'a> Lexer<'a> {
                     c => Ok(c),
                 }
             }
-            '\n' | '\0' => Err(LexerError::IncorrectInput),
+            '\n' | '\0' => Err(LexerError::IncorrectInput(self.loc)),
             c => Ok(c),
         }
     }
 
+    // octalDigit = "0" … "7"
+    fn next_octal_digit(&mut self) -> LexerResult<u32> {
+        self.next_char_expect(
+            |c| c >= '0' && c <= '7',
+            LexerError::ExpectOctDigit(self.loc),
+        )
+        .map(|c| c as u32 - '0' as u32)
+    }
+
+    // hexDigit = "0" … "9" | "A" … "F" | "a" … "f"
+    fn next_hex_digit(&mut self) -> LexerResult<u32> {
+        let mut clone = self.clone();
+        let r = match clone.next_char()? {
+            c if c >= '0' && c <= '9' => c as u32 - b'0' as u32,
+            c if c >= 'A' && c <= 'Z' => c as u32 - b'A' as u32 + 10,
+            c if c >= 'a' && c <= 'z' => c as u32 - b'a' as u32 + 10,
+            _ => return Err(LexerError::ExpectHexDigit(self.loc)),
+        };
+        *self = clone;
+        Ok(r)
+    }
+
     fn next_char(&mut self) -> LexerResult<char> {
-        self.next_char_opt().ok_or(LexerError::UnexpectedEof)
+        self.next_char_opt()
+            .ok_or(LexerError::UnexpectedEof(self.loc))
     }
 
     fn next_char_if_eq(&mut self, expect: char) -> bool {
@@ -343,7 +374,7 @@ impl<'a> Lexer<'a> {
         if self.next_char_if_eq(expect) {
             Ok(())
         } else {
-            Err(LexerError::ExpectChar(expect))
+            Err(LexerError::ExpectChar(self.loc, expect))
         }
     }
 
@@ -379,7 +410,7 @@ impl<'a> Lexer<'a> {
         if self.skip_if_lookahead_is_str("/*") {
             let end = "*/";
             match self.rem_chars().find(end) {
-                None => Err(LexerError::UnexpectedEof),
+                None => Err(LexerError::UnexpectedEof(self.loc)),
                 Some(len) => {
                     let new_pos = self.pos + len + end.len();
                     self.skip_to_pos(new_pos);

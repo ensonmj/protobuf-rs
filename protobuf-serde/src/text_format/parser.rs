@@ -63,7 +63,13 @@ impl<'a> Parser<'a> {
         let mut extends = Vec::new();
         let mut services = Vec::new();
 
+        // parse top level statement
         while !self.tokenizer.syntax_eof()? {
+            // emptyStatment
+            if self.tokenizer.next_symbol_if_eq(';')? {
+                continue;
+            }
+
             if let Some(next_package) = self.next_package_opt()? {
                 package = next_package.to_owned();
                 continue;
@@ -96,10 +102,6 @@ impl<'a> Parser<'a> {
 
             if let Some(service) = self.next_service_opt()? {
                 services.push(service);
-                continue;
-            }
-
-            if self.tokenizer.next_symbol_if_eq(';')? {
                 continue;
             }
 
@@ -151,10 +153,6 @@ impl<'a> Parser<'a> {
     // fullIdent = ident { "." ident }
     fn next_full_ident(&mut self) -> ParserResult<String> {
         let mut full_ident = String::new();
-        // https://github.com/google/protobuf/issues/4563
-        if self.tokenizer.next_symbol_if_eq('.')? {
-            full_ident.push('.');
-        }
         full_ident.push_str(&self.tokenizer.next_ident()?);
         while self.tokenizer.next_symbol_if_eq('.')? {
             full_ident.push('.');
@@ -165,11 +163,11 @@ impl<'a> Parser<'a> {
 
     // Import Statement
     // import = "import" [ "weak" | "public" ] strLit ";"
-    // TODO: support "weak" and "public"
     pub fn next_import_opt(&mut self) -> ParserResult<Option<String>> {
         if !self.tokenizer.next_ident_if_eq("import")? {
             return Ok(None);
         }
+        // TODO: support "weak" and "public"
         if self
             .tokenizer
             .lookahead_ident_if_in(&["weak", "public"])?
@@ -188,88 +186,91 @@ impl<'a> Parser<'a> {
         if !self.tokenizer.next_ident_if_eq("option")? {
             return Ok(None);
         }
-        let name = self.next_option_name()?;
-        self.tokenizer.next_symbol_expect_eq('=')?;
-        let value = self.next_constant()?;
+        let option = self.next_option_assignment()?;
         self.tokenizer.next_symbol_expect_eq(';')?;
-        Ok(Some(ProtobufOption { name, value }))
+        Ok(Some(option))
     }
 
-    // https://github.com/google/protobuf/issues/4563
+    // optionName "=" constant
+    fn next_option_assignment(&mut self) -> ParserResult<ProtobufOption> {
+        let name = self.next_option_name()?;
+        self.tokenizer.next_symbol_expect_eq('=')?;
+        let value = self.next_uninterpreted_option_value()?;
+        Ok(ProtobufOption { name, value })
+    }
+
     // optionName = ( ident | "(" fullIdent ")" ) { "." ident }
     fn next_option_name(&mut self) -> ParserResult<String> {
         let mut option_name = String::new();
-        option_name.push_str(&self.next_ident_or_braced()?);
+        option_name.push_str(&self.next_option_name_part()?);
         while self.tokenizer.next_symbol_if_eq('.')? {
             option_name.push('.');
-            option_name.push_str(&self.next_ident_or_braced()?);
+            option_name.push_str(&self.next_option_name_part()?);
         }
         Ok(option_name)
     }
 
+    // https://github.com/google/protobuf/issues/4563
+    fn next_option_name_part(&mut self) -> ParserResult<String> {
+        let mut option_name_part = String::new();
+        if self.tokenizer.next_symbol_if_eq('(')? {
+            option_name_part.push('(');
+            // from protoc ParserOptionNamePart
+            // An extension name consists of dot-separated identifiers,
+            // and may begin with a dot.
+            if self.tokenizer.next_symbol_if_eq('.')? {
+                option_name_part.push('.');
+            }
+            option_name_part.push_str(&self.tokenizer.next_ident()?);
+            while self.tokenizer.next_symbol_if_eq('.')? {
+                option_name_part.push('.');
+                option_name_part.push_str(&self.tokenizer.next_ident()?);
+            }
+            self.tokenizer.next_symbol_expect_eq(')')?;
+            option_name_part.push(')');
+        } else {
+            option_name_part.push_str(&self.tokenizer.next_ident()?);
+        }
+        Ok(option_name_part)
+    }
+
     // Constant
     // constant = fullIdent | ( [ "-" | "+" ] intLit ) | ( [ "-" | "+" ] floatLit ) | strLit | boolLit
-    fn next_constant(&mut self) -> ParserResult<ProtobufConstant> {
-        // https://github.com/google/protobuf/blob/a21f225824e994ebd35e8447382ea4e0cd165b3c/src/google/protobuf/unittest_custom_options.proto#L350
-        if self.tokenizer.lookahead_symbol_if_eq('{')? {
-            return Ok(ProtobufConstant::BracedExpr(self.next_braces()?));
-        }
-
-        if let Some(c) = self.tokenizer.lookahead_symbol_if_in("+-")? {
-            self.tokenizer.advance()?;
-            let sign = c == '+';
-            return Ok(self.next_num_lit(sign)?);
-        }
-
-        if let Some(b) = self.next_bool_lit_opt()? {
-            return Ok(ProtobufConstant::Bool(b));
-        }
-
+    //
+    // protoc does not support '+' and use 'Ident' instead of 'fullIdent'
+    fn next_uninterpreted_option_value(&mut self) -> ParserResult<UninterpretedOptionValue> {
         match self.tokenizer.lookahead_some()? {
             Token::IntLit(..) | Token::FloatLit(..) => {
                 return self.next_num_lit(true);
             }
             Token::Ident(..) => {
-                return Ok(ProtobufConstant::Ident(self.next_full_ident()?));
+                // use 'Ident' instead of 'fullIdent'
+                return Ok(UninterpretedOptionValue::Ident(
+                    self.tokenizer.next_ident()?,
+                ));
             }
             Token::StrLit(..) => {
-                return Ok(ProtobufConstant::String(self.tokenizer.next_str_lit()?))
+                return Ok(UninterpretedOptionValue::String(
+                    self.tokenizer.next_str_lit()?,
+                ))
+            }
+            // protoc does not support '+'
+            Token::Symbol('-') => {
+                self.tokenizer.advance()?;
+                return Ok(self.next_num_lit(false)?);
+            }
+            Token::Symbol('{') => {
+                // https://github.com/google/protobuf/blob/a21f225824e994ebd35e8447382ea4e0cd165b3c/src/google/protobuf/unittest_custom_options.proto#L350
+                self.tokenizer.advance()?;
+                return Ok(UninterpretedOptionValue::BracedExpr(
+                    self.next_brace_expr()?,
+                ));
             }
             _ => Err(ParserError::ExpectConstant),
         }
     }
 
-    fn next_braces(&mut self) -> ParserResult<String> {
-        let mut r = String::new();
-        self.tokenizer.next_symbol_expect_eq('{')?;
-        r.push('{');
-        loop {
-            if self.tokenizer.lookahead_symbol_if_eq('{')? {
-                r.push_str(&self.next_braces()?);
-                continue;
-            }
-            let next = self.tokenizer.next_some()?;
-            r.push_str(&next.format());
-            if let Token::Symbol('}') = next {
-                break;
-            }
-        }
-        Ok(r)
-    }
-
-    // Boolean
-    // boolLit = "true" | "false"
-    fn next_bool_lit_opt(&mut self) -> ParserResult<Option<bool>> {
-        Ok(if self.tokenizer.next_ident_if_eq("true")? {
-            Some(true)
-        } else if self.tokenizer.next_ident_if_eq("false")? {
-            Some(false)
-        } else {
-            None
-        })
-    }
-
-    fn next_num_lit(&mut self, sign_is_plus: bool) -> ParserResult<ProtobufConstant> {
+    fn next_num_lit(&mut self, sign_is_plus: bool) -> ParserResult<UninterpretedOptionValue> {
         /// Negate `u64` checking for overflow.
         pub fn neg(value: u64) -> Result<i64, ParserError> {
             if value <= 0x7fff_ffff_ffff_ffff {
@@ -284,17 +285,17 @@ impl<'a> Parser<'a> {
         Ok(self.tokenizer.next_token_expect_map(|token| match token {
             &Token::IntLit(i) => {
                 let u = if sign_is_plus {
-                    ProtobufConstant::U64(i)
+                    UninterpretedOptionValue::U64(i)
                 } else {
-                    ProtobufConstant::I64(neg(i)?)
+                    UninterpretedOptionValue::I64(neg(i)?)
                 };
                 return Ok(u);
             }
             &Token::FloatLit(f) => {
                 let f = if sign_is_plus {
-                    ProtobufConstant::F64(f)
+                    UninterpretedOptionValue::F64(f)
                 } else {
-                    ProtobufConstant::F64(-f)
+                    UninterpretedOptionValue::F64(-f)
                 };
                 return Ok(f);
             }
@@ -302,18 +303,25 @@ impl<'a> Parser<'a> {
         })?)
     }
 
-    // TODO: why next_full_ident vs next_ident?
-    fn next_ident_or_braced(&mut self) -> ParserResult<String> {
-        let mut ident_or_braced = String::new();
-        if self.tokenizer.next_symbol_if_eq('(')? {
-            ident_or_braced.push('(');
-            ident_or_braced.push_str(&self.next_full_ident()?);
-            self.tokenizer.next_symbol_expect_eq(')')?;
-            ident_or_braced.push(')');
-        } else {
-            ident_or_braced.push_str(&self.tokenizer.next_ident()?);
+    // Note that enclosing braces are not added to *value.
+    fn next_brace_expr(&mut self) -> ParserResult<String> {
+        let mut r = String::new();
+        let mut brace_depth = 1;
+        loop {
+            if self.tokenizer.lookahead_symbol_if_eq('{')? {
+                brace_depth += 1;
+            } else if self.tokenizer.lookahead_symbol_if_eq('}')? {
+                brace_depth -= 1;
+                if brace_depth == 0 {
+                    self.tokenizer.advance()?;
+                    return Ok(r);
+                }
+            }
+            if !r.is_empty() {
+                r.push(' ');
+            }
+            r.push_str(&self.tokenizer.next_some()?.to_string());
         }
-        Ok(ident_or_braced)
     }
 
     // Enum definition
@@ -325,8 +333,10 @@ impl<'a> Parser<'a> {
         }
 
         let name = self.tokenizer.next_ident()?.to_owned();
-        let mut values = Vec::new();
         let mut options = Vec::new();
+        let mut reserved_nums = Vec::new();
+        let mut reserved_names = Vec::new();
+        let mut values = Vec::new();
 
         self.tokenizer.next_symbol_expect_eq('{')?;
         while !self.tokenizer.lookahead_symbol_if_eq('}')? {
@@ -340,35 +350,80 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            if let Some((field_nums, field_names)) = self.next_reserved_opt()? {
+                reserved_nums.extend(field_nums);
+                reserved_names.extend(field_names);
+                continue;
+            }
+
             values.push(self.next_enum_field()?);
         }
-        self.tokenizer.next_symbol_expect_eq('}')?;
+        self.tokenizer.advance()?;
+
+        // TODO: validate enum
         Ok(Some(Enumeration {
             name,
             values,
             options,
+            reserved_nums,
+            reserved_names,
         }))
     }
 
-    // enumField = ident "=" intLit [ "[" enumValueOption { ","  enumValueOption } "]" ]";"
-    fn next_enum_field(&mut self) -> ParserResult<EnumValue> {
-        let name = self.tokenizer.next_ident()?.to_owned();
-        self.tokenizer.next_symbol_expect_eq('=')?;
-        let number = self.next_enum_value()?;
-        if self.tokenizer.next_symbol_if_eq('[')? {
-            self.next_enum_value_option()?;
-            while self.tokenizer.next_symbol_if_eq(',')? {
-                self.next_enum_value_option()?;
-            }
-            self.tokenizer.next_symbol_expect_eq(']')?;
+    // Grammar is incorrect: https://github.com/google/protobuf/issues/4558
+    // reserved = "reserved" ( ranges | fieldNames ) ";"
+    // fieldNames = fieldName { "," fieldName }
+    fn next_reserved_opt(&mut self) -> ParserResult<Option<(Vec<FieldNumberRange>, Vec<String>)>> {
+        if !self.tokenizer.next_ident_if_eq("reserved")? {
+            return Ok(None);
         }
+
+        let (ranges, names) = if let &Token::StrLit(..) = self.tokenizer.lookahead_some()? {
+            let mut names = Vec::new();
+            names.push(self.tokenizer.next_str_lit()?);
+            while self.tokenizer.next_symbol_if_eq(',')? {
+                names.push(self.tokenizer.next_str_lit()?);
+            }
+            (Vec::new(), names)
+        } else {
+            (self.next_ranges()?, Vec::new())
+        };
+
         self.tokenizer.next_symbol_expect_eq(';')?;
-        Ok(EnumValue { name, number })
+
+        Ok(Some((ranges, names)))
     }
-    // https://github.com/google/protobuf/issues/4561
-    pub fn next_enum_value(&mut self) -> ParserResult<i32> {
+
+    // ranges = range { "," range }
+    fn next_ranges(&mut self) -> ParserResult<Vec<FieldNumberRange>> {
+        let mut ranges = Vec::new();
+        ranges.push(self.next_range()?);
+        while self.tokenizer.next_symbol_if_eq(',')? {
+            ranges.push(self.next_range()?);
+        }
+        Ok(ranges)
+    }
+
+    // range =  intLit [ "to" ( intLit | "max" ) ]
+    fn next_range(&mut self) -> ParserResult<FieldNumberRange> {
+        let from = self.next_signed_integer()?;
+        let to = if self.tokenizer.next_ident_if_eq("to")? {
+            if self.tokenizer.next_ident_if_eq("max")? {
+                i32::max_value()
+            } else {
+                self.next_signed_integer()?
+            }
+        } else {
+            from
+        };
+        Ok(FieldNumberRange { from, to })
+    }
+
+    // equal to protoc's ConsumeSignedInteger
+    fn next_signed_integer(&mut self) -> ParserResult<i32> {
         let minus = self.tokenizer.next_symbol_if_eq('-')?;
         let lit = self.tokenizer.next_int_lit()?;
+        // protoc limit enum value to i32
         Ok(if minus {
             let unsigned = lit.to_i64()?;
             match unsigned.checked_neg() {
@@ -380,12 +435,27 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // enumField = ident "=" intLit [ "[" enumValueOption { ","  enumValueOption } "]" ]";"
     // enumValueOption = optionName "=" constant
-    pub fn next_enum_value_option(&mut self) -> ParserResult<()> {
-        self.next_option_name()?;
+    fn next_enum_field(&mut self) -> ParserResult<EnumValue> {
+        let name = self.tokenizer.next_ident()?.to_owned();
         self.tokenizer.next_symbol_expect_eq('=')?;
-        self.next_constant()?;
-        Ok(())
+        let number = self.next_enum_value()?;
+
+        if self.tokenizer.next_symbol_if_eq('[')? {
+            self.next_option_assignment()?;
+            while self.tokenizer.next_symbol_if_eq(',')? {
+                self.next_option_assignment()?;
+            }
+            self.tokenizer.next_symbol_expect_eq(']')?;
+        }
+        self.tokenizer.next_symbol_expect_eq(';')?;
+        Ok(EnumValue { name, number })
+    }
+
+    // https://github.com/google/protobuf/issues/4561
+    fn next_enum_value(&mut self) -> ParserResult<i32> {
+        self.next_signed_integer()
     }
 
     // Message definition
@@ -474,8 +544,8 @@ impl<'a> Parser<'a> {
 
             r.fields.push(self.next_field(mode)?);
         }
+        self.tokenizer.advance()?;
 
-        self.tokenizer.next_symbol_expect_eq('}')?;
         Ok(r)
     }
 
@@ -610,28 +680,22 @@ impl<'a> Parser<'a> {
     // fieldNumber = intLit;
     fn next_field_number(&mut self) -> ParserResult<i32> {
         self.tokenizer.next_token_expect_map(|token| match token {
+            // protoc limit field number to i32
             &Token::IntLit(i) => i.to_i32(),
             _ => Err(ParserError::IncorrectInput),
         })
     }
 
     // fieldOptions = fieldOption { ","  fieldOption }
+    // fieldOption = optionName "=" constant
     fn next_field_options(&mut self) -> ParserResult<Vec<ProtobufOption>> {
         let mut options = Vec::new();
-        options.push(self.next_field_option()?);
+        options.push(self.next_option_assignment()?);
 
         while self.tokenizer.next_symbol_if_eq(',')? {
-            options.push(self.next_field_option()?);
+            options.push(self.next_option_assignment()?);
         }
         Ok(options)
-    }
-
-    // fieldOption = optionName "=" constant
-    fn next_field_option(&mut self) -> ParserResult<ProtobufOption> {
-        let name = self.next_option_name()?;
-        self.tokenizer.next_symbol_expect_eq('=')?;
-        let value = self.next_constant()?;
-        Ok(ProtobufOption { name, value })
     }
 
     // oneof = "oneof" oneofName "{" { oneofField | emptyStatement } "}"
@@ -670,55 +734,6 @@ impl<'a> Parser<'a> {
             return Ok(None);
         }
         Ok(Some(self.next_ranges()?))
-    }
-
-    // ranges = range { "," range }
-    fn next_ranges(&mut self) -> ParserResult<Vec<FieldNumberRange>> {
-        let mut ranges = Vec::new();
-        ranges.push(self.next_range()?);
-        while self.tokenizer.next_symbol_if_eq(',')? {
-            ranges.push(self.next_range()?);
-        }
-        Ok(ranges)
-    }
-
-    // range =  intLit [ "to" ( intLit | "max" ) ]
-    fn next_range(&mut self) -> ParserResult<FieldNumberRange> {
-        let from = self.next_field_number()?;
-        let to = if self.tokenizer.next_ident_if_eq("to")? {
-            if self.tokenizer.next_ident_if_eq("max")? {
-                i32::max_value()
-            } else {
-                self.next_field_number()?
-            }
-        } else {
-            from
-        };
-        Ok(FieldNumberRange { from, to })
-    }
-
-    // Grammar is incorrect: https://github.com/google/protobuf/issues/4558
-    // reserved = "reserved" ( ranges | fieldNames ) ";"
-    // fieldNames = fieldName { "," fieldName }
-    fn next_reserved_opt(&mut self) -> ParserResult<Option<(Vec<FieldNumberRange>, Vec<String>)>> {
-        if !self.tokenizer.next_ident_if_eq("reserved")? {
-            return Ok(None);
-        }
-
-        let (ranges, names) = if let &Token::StrLit(..) = self.tokenizer.lookahead_some()? {
-            let mut names = Vec::new();
-            names.push(self.tokenizer.next_str_lit()?);
-            while self.tokenizer.next_symbol_if_eq(',')? {
-                names.push(self.tokenizer.next_str_lit()?);
-            }
-            (Vec::new(), names)
-        } else {
-            (self.next_ranges()?, Vec::new())
-        };
-
-        self.tokenizer.next_symbol_expect_eq(';')?;
-
-        Ok(Some((ranges, names)))
     }
 
     // Extend
@@ -761,10 +776,20 @@ impl<'a> Parser<'a> {
         }
 
         let name = self.tokenizer.next_ident()?;
-        let mut methods = Vec::new();
         let mut options = Vec::new();
+        let mut methods = Vec::new();
         self.tokenizer.next_symbol_expect_eq('{')?;
         while !self.tokenizer.lookahead_symbol_if_eq('}')? {
+            // emptyStatment
+            if self.tokenizer.next_symbol_if_eq(';')? {
+                continue;
+            }
+
+            if let Some(o) = self.next_option_opt()? {
+                options.push(o);
+                continue;
+            }
+
             if let Some(method) = self.next_rpc_opt()? {
                 methods.push(method);
                 continue;
@@ -777,34 +802,15 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            if let Some(o) = self.next_option_opt()? {
-                options.push(o);
-                continue;
-            }
-
-            if let Some(()) = self.next_empty_statement_opt()? {
-                continue;
-            }
-
             return Err(ParserError::IncorrectInput);
         }
+        self.tokenizer.advance()?;
 
-        self.tokenizer.next_symbol_expect_eq('}')?;
         Ok(Some(Service {
             name,
             methods,
             options,
         }))
-    }
-
-    // EmptyStatement
-    // emptyStatement = ";"
-    pub fn next_empty_statement_opt(&mut self) -> ParserResult<Option<()>> {
-        if self.tokenizer.next_symbol_if_eq(';')? {
-            Ok(Some(()))
-        } else {
-            Ok(None)
-        }
     }
 
     // rpc = "rpc" rpcName "(" [ "stream" ] messageType ")"
@@ -857,18 +863,19 @@ impl<'a> Parser<'a> {
         let mut options = Vec::new();
         if self.tokenizer.next_symbol_if_eq('{')? {
             while !self.tokenizer.lookahead_symbol_if_eq('}')? {
+                // emptyStatment
+                if self.tokenizer.next_symbol_if_eq(';')? {
+                    continue;
+                }
+
                 if let Some(option) = self.next_option_opt()? {
                     options.push(option);
                     continue;
                 }
 
-                if let Some(()) = self.next_empty_statement_opt()? {
-                    continue;
-                }
-
                 return Err(ParserError::IncorrectInput);
             }
-            self.tokenizer.next_symbol_expect_eq('}')?;
+            self.tokenizer.advance()?;
         } else {
             self.tokenizer.next_symbol_expect_eq(';')?;
         }
@@ -1054,7 +1061,7 @@ mod test {
         assert_eq!(res.name, "java_package");
         assert_eq!(
             res.value,
-            ProtobufConstant::String("com.example.foo".to_owned())
+            UninterpretedOptionValue::String("com.example.foo".to_owned())
         );
     }
 
@@ -1079,7 +1086,10 @@ mod test {
         assert_eq!(res.values[2].name, "RUNNING");
         assert_eq!(res.values[2].number, 2);
         assert_eq!(res.options[0].name, "allow_alias");
-        assert_eq!(res.options[0].value, ProtobufConstant::Bool(true));
+        assert_eq!(
+            res.options[0].value,
+            UninterpretedOptionValue::Ident("true".to_owned())
+        );
     }
 
     #[test]
@@ -1099,7 +1109,10 @@ mod test {
         let res = p.next_message_opt().unwrap().unwrap();
         assert_eq!(res.name, "Outer");
         assert_eq!(res.options[0].name, "(my_option).a");
-        assert_eq!(res.options[0].value, ProtobufConstant::Bool(true));
+        assert_eq!(
+            res.options[0].value,
+            UninterpretedOptionValue::Ident("true".to_owned())
+        );
         assert_eq!(res.messages[0].name, "Inner");
         assert_eq!(res.messages[0].fields[0].name, "ival");
         assert_eq!(res.messages[0].fields[0].number, 1);
@@ -1107,7 +1120,7 @@ mod test {
         assert_eq!(res.messages[0].fields[0].options[0].name, "default");
         assert_eq!(
             res.messages[0].fields[0].options[0].value,
-            ProtobufConstant::F64(-8e-28)
+            UninterpretedOptionValue::F64(-8e-28)
         );
         assert_eq!(res.fields[0].name, "my_map");
         assert_eq!(res.fields[0].number, 2);
@@ -1144,7 +1157,10 @@ mod test {
         assert_eq!(res.messages[0].fields[0].number, 1);
         assert_eq!(res.messages[0].fields[0].typ, FieldType::Int64);
         assert_eq!(res.options[0].name, "(my_option).a");
-        assert_eq!(res.options[0].value, ProtobufConstant::Bool(true));
+        assert_eq!(
+            res.options[0].value,
+            UninterpretedOptionValue::Ident("true".to_owned())
+        );
     }
 
     #[test]
